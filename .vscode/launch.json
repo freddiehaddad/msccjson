@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "codelldb",
+      "request": "launch",
+      "name": "Debug Rust Project",
+      "program": "${workspaceFolder}/target/debug/msccjson.exe",
+      "args": [
+        "--input-file=input/msbuild.log",
+        "--output-file=output/compile_commands.json",
+        "--compiler-executable=cl.exe"
+      ],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
