@@ -3,20 +3,13 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::{env, path::Path, path::PathBuf};
+use std::{path::Path, path::PathBuf};
 
 #[derive(Deserialize, Serialize)]
 struct CompileCommand {
     file: String,
     directory: String,
     arguments: Vec<String>,
-}
-
-/// Get the path to the executable for the CLI default value.
-fn get_default_input_path(file_name: &str) -> PathBuf {
-    let mut path = env::current_dir().unwrap();
-    path.push(file_name);
-    path
 }
 
 #[derive(Parser)]
@@ -26,20 +19,23 @@ fn get_default_input_path(file_name: &str) -> PathBuf {
 )]
 struct Cli {
     /// Path to msbuild.log
-    #[arg(short, long, default_value = get_default_input_path("msbuild.log").into_os_string())]
+    #[arg(short, long)]
     input_file: PathBuf,
 
     /// Output JSON file
-    #[arg(short, long, default_value = get_default_input_path("compile_commands.json").into_os_string())]
+    #[arg(short, long, default_value = "compile_commands.json")]
     output_file: PathBuf,
 
     /// Name of compiler executable
-    #[arg(short, long, name="EXE", default_value_t = String::from("cl.exe"))]
+    #[arg(short, long, name = "EXE", default_value = "cl.exe")]
     compiler_executable: String,
 }
 
 /// Returns all lines from `handle` that contain the substring `pattern`.
-fn filter_compile_commands(handle: BufReader<File>, filter: String) -> Vec<String> {
+fn filter_compile_commands(
+    handle: BufReader<File>,
+    filter: String,
+) -> Vec<String> {
     handle
         .lines()
         .map_while(Result::ok)
@@ -63,7 +59,9 @@ fn get_target_cpp_file(arguments: &[String]) -> Result<&String> {
 }
 
 /// Converts a vector of compile commands into a CompileCommand.
-fn generate_entries(compile_commands: Vec<String>) -> Result<Vec<CompileCommand>> {
+fn generate_entries(
+    compile_commands: Vec<String>,
+) -> Result<Vec<CompileCommand>> {
     let mut entries = Vec::new();
     for compile_command in &compile_commands {
         let arguments: Vec<_> = compile_command
@@ -71,7 +69,13 @@ fn generate_entries(compile_commands: Vec<String>) -> Result<Vec<CompileCommand>
             .map(String::from)
             .collect();
 
+        // We expect a proper path (can be relative) as the last line in the cl.exe compile
+        // command.
+        // Example: S:\Azure\Storage\XStore\src\base\PlatformConfig\lib\vdsutils.cpp
         let target_cpp_file = Path::new(get_target_cpp_file(&arguments)?);
+
+        // The directory field of the compile_commands.json entry
+        // S:\Azure\Storage\XStore\src\base\PlatformConfig\lib\
         let directory = match target_cpp_file.parent() {
             Some(parent) => parent.display().to_string(),
             None => {
@@ -84,10 +88,15 @@ fn generate_entries(compile_commands: Vec<String>) -> Result<Vec<CompileCommand>
         };
 
         if directory.is_empty() {
-            eprintln!("Parent component is empty: {}", target_cpp_file.display());
+            eprintln!(
+                "Parent component is empty: {}",
+                target_cpp_file.display()
+            );
             continue;
         }
 
+        // The file field of the compile_commands.json entry
+        // vdsutils.cpp
         let file_name = match target_cpp_file.file_name() {
             Some(file_name) => file_name.to_string_lossy().to_string(),
             None => {
@@ -107,6 +116,7 @@ fn generate_entries(compile_commands: Vec<String>) -> Result<Vec<CompileCommand>
             continue;
         }
 
+        // Construct and add the entry
         entries.push(CompileCommand {
             file: file_name,
             directory,
@@ -126,8 +136,9 @@ fn main() -> Result<()> {
     let compiler_executable = cli.compiler_executable;
 
     // File reader
-    let input_file_handle = File::open(&input_file)
-        .with_context(|| format!("Failed to open {}", input_file.to_string_lossy()))?;
+    let input_file_handle = File::open(&input_file).with_context(|| {
+        format!("Failed to open {}", input_file.to_string_lossy())
+    })?;
 
     let input_file_handle = BufReader::new(input_file_handle);
 
@@ -137,10 +148,13 @@ fn main() -> Result<()> {
         .create(true)
         .truncate(true)
         .open(&output_file)
-        .with_context(|| format!("Failed to open {}", output_file.to_string_lossy()))?;
+        .with_context(|| {
+            format!("Failed to open {}", output_file.to_string_lossy())
+        })?;
 
     // Collect all the compile commands from the input file
-    let compile_commands: Vec<_> = filter_compile_commands(input_file_handle, compiler_executable);
+    let compile_commands: Vec<_> =
+        filter_compile_commands(input_file_handle, compiler_executable);
 
     println!("Found {} compile commands", compile_commands.len());
 
