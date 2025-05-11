@@ -62,25 +62,6 @@ fn get_target_cpp_file(arguments: &[String]) -> Result<&String> {
     Ok(target_cpp_file)
 }
 
-/// Returns the final component of the `path`, if there is one.
-fn get_file_name_from_path(path: &Path) -> Result<String> {
-    let file_name = path.file_name().ok_or_else(|| {
-        anyhow::anyhow!(
-            "Failed to extract filename from: {}",
-            path.to_string_lossy()
-        )
-    })?;
-    Ok(file_name.to_string_lossy().to_string())
-}
-
-/// Returns the `path` without its final component, if there is one.
-fn get_parent_from_path(path: &Path) -> Result<String> {
-    let parent_path = path.parent().ok_or_else(|| {
-        anyhow::anyhow!("Failed to extract path from: {}", path.to_string_lossy())
-    })?;
-    Ok(parent_path.display().to_string())
-}
-
 /// Converts a vector of compile commands into a CompileCommand.
 fn generate_entries(compile_commands: Vec<String>) -> Result<Vec<CompileCommand>> {
     let mut entries = Vec::new();
@@ -90,9 +71,41 @@ fn generate_entries(compile_commands: Vec<String>) -> Result<Vec<CompileCommand>
             .map(String::from)
             .collect();
 
-        let target_cpp_file = PathBuf::from(get_target_cpp_file(&arguments)?);
-        let file_name = get_file_name_from_path(&target_cpp_file)?;
-        let directory = get_parent_from_path(&target_cpp_file)?;
+        let target_cpp_file = Path::new(get_target_cpp_file(&arguments)?);
+        let directory = match target_cpp_file.parent() {
+            Some(parent) => parent.display().to_string(),
+            None => {
+                eprintln!(
+                    "Unable to extract parent component: {}",
+                    target_cpp_file.display()
+                );
+                continue;
+            }
+        };
+
+        if directory.is_empty() {
+            eprintln!("Parent component is empty: {}", target_cpp_file.display());
+            continue;
+        }
+
+        let file_name = match target_cpp_file.file_name() {
+            Some(file_name) => file_name.to_string_lossy().to_string(),
+            None => {
+                eprintln!(
+                    "Unable to extract file_name component: {}",
+                    target_cpp_file.display()
+                );
+                continue;
+            }
+        };
+
+        if file_name.is_empty() {
+            eprintln!(
+                "File name component is empty: {}",
+                target_cpp_file.display()
+            );
+            continue;
+        }
 
         entries.push(CompileCommand {
             file: file_name,
