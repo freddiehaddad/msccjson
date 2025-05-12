@@ -32,7 +32,7 @@ Usage: msccjson.exe [OPTIONS] --input-file <INPUT_FILE>
 Options:
   -i, --input-file <INPUT_FILE>              Path to msbuild.log
   -o, --output-file <OUTPUT_FILE>            Output JSON file [default: compile_commands.json]
-  -d, --source-directory <SOURCE_DIRECTORY>  Path to source code [default: c:\projects\example]
+  -d, --source-directory <SOURCE_DIRECTORY>  Path to source code
   -e, --source-extension <SOURCE_EXTENSION>  File extension for cpp files [default: cpp]
   -c, --compiler-executable <EXE>            Name of compiler executable [default: cl.exe]
   -h, --help                                 Print help

@@ -29,7 +29,7 @@ struct Cli {
     output_file: PathBuf,
 
     /// Path to source code
-    #[arg(short('d'), long, default_value = r"S:\Azure\Storage\XStore")]
+    #[arg(short('d'), long)]
     source_directory: PathBuf,
 
     /// File extension for cpp files
