@@ -71,9 +71,11 @@ fn generate_entries(
             .map(String::from)
             .collect();
 
-        // We expect a proper path (can be relative) as the last line in the cl.exe compile
-        // command.
-        // Example: S:\Azure\Storage\XStore\src\base\PlatformConfig\lib\vdsutils.cpp
+        // We expect a proper path (can be relative) as the last line in the
+        // cl.exe compile command.
+        //
+        // Example:
+        //   S:\Azure\Storage\XStore\src\base\PlatformConfig\lib\vdsutils.cpp
         let target_cpp_file =
             Path::new(arguments.iter().last().ok_or_else(|| {
                 anyhow::anyhow!("Unexpected input: {:?}", arguments)
@@ -101,7 +103,9 @@ fn generate_entries(
         }
 
         // The directory field of the compile_commands.json entry
-        // S:\Azure\Storage\XStore\src\base\PlatformConfig\lib\
+        //
+        // Example:
+        //   S:\Azure\Storage\XStore\src\base\PlatformConfig\lib\
         let directory = match target_cpp_file.parent() {
             Some(parent) => parent.display().to_string(),
             None => {
@@ -110,10 +114,12 @@ fn generate_entries(
             }
         };
 
+        // Check the directory tree if path is not part of the compile command
         let directory = match directory.is_empty() {
             false => directory,
             true => match directory_tree.get(&file_name) {
                 Some(dir) => {
+                    // An empty value indicates duplicate files names; skip
                     if dir.is_empty() {
                         eprintln!(
                             "{}: no entry found in tree",
@@ -146,14 +152,14 @@ fn generate_entries(
     Ok(entries)
 }
 
-/// Explores the entire directory tree starting from `dir` adding any files with `extension` to the
-/// `tree` as the key and the parent path of the file as the value.  This lookup table is used for
-/// adding the directory entry to the compile_commands.json file where its not specified on the
-/// command line.
+/// Explores the entire directory tree starting from `dir` adding any files with
+/// `extension` to the `tree` as the key and the parent path of the file as the
+/// value.  This lookup table is used for adding the directory entry to the
+/// compile_commands.json file where its not specified on the command line.
 ///
-/// Because files with matching names can exist in multiple directories, these cases result in the
-/// value entry in the tree being set to the empty string since we cannot know which path is the
-/// correct one.
+/// Because files with matching names can exist in multiple directories, these
+/// cases result in the value entry in the tree being set to the empty string
+/// since we cannot know which path is the correct one.
 fn find_files(
     dir: &Path,
     extension: &Path,
@@ -180,7 +186,7 @@ fn find_files(
                 String::from(path.file_name().unwrap().to_string_lossy());
             let parent = String::from(path.parent().unwrap().to_string_lossy());
 
-            // Add key/value pair (file_name/path) to the hash table or clear on collision
+            // Add KV pair (file/path) to the hash table; clear on collision
             match tree.entry(file_name) {
                 Entry::Vacant(e) => {
                     e.insert(parent);
@@ -231,6 +237,7 @@ fn main() -> Result<()> {
         )
     );
 
+    // Generate a map of files and their directories
     let mut source_tree: HashMap<String, String> = HashMap::new();
     find_files(&source_directory, &source_extension, &mut source_tree)?;
 
