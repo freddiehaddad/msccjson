@@ -49,3 +49,14 @@ entry for the `compile_commands.json` file. However, it's possible that
 multiple files with the same name can exist in different directories. In this
 case, it is unknown which directory is correct. Thus the entry is explicitly
 left out in the generated output.
+
+Consider the following scenario:
+
+```console
+.
++-- bar
+|   \-- widget.cpp
++-- foo
+|   \-- widget.cpp
+\-- main.cpp
+```
