@@ -39,8 +39,13 @@ Options:
   -V, --version                              Print version
 ```
 
-## Missing Functionality
+## Known Issues
 
-Some entries may be missing the path to the `.cpp` file. In this case, an error
-message is printed to `stderr` and the entry is skipped. However, the goal is
-to implement proper handling for such entries.
+Some files in the `msbuild.log` output do not contain the full path. To address
+this, the entire directory tree `source-directory` is recursively explored
+searching for all files with an extension matching `source-extension`. They are
+added to an internal KV store to use as a lookup table when generating the final
+entry for the `compile_commands.json` file. However, it's possible that
+multiple files with the same name can exist in different directories. In this
+case, it is unknown which directory is correct. Thus the entry is explicitly
+left out in the generated output.
