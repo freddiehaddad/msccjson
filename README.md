@@ -12,7 +12,10 @@ the following format:
 {
     "file": "main.cpp",
     "directory": "C:\\projects\\example",
-    "arguments": "cl.exe /EHsc /Zi /D DEBUG main.cpp"
+    "arguments": [
+        "cl.exe", "/EHsc", "/Zi", "/D", "DEBUG",
+        "C:\\projects\\example\\main.cpp"
+    ]
 }
 ```
 
@@ -22,16 +25,18 @@ See the help (`msccjson.exe --help`) for how to use the program.
 
 ```console
 > msccjson.exe --help
-Utility to generate a compile_commands.json file from msbuild.log output for XStore.
+Utility to generate a compile_commands.json file from msbuild.log.
 
 Usage: msccjson.exe [OPTIONS] --input-file <INPUT_FILE>
 
 Options:
-  -i, --input-file <INPUT_FILE>    Path to msbuild.log
-  -o, --output-file <OUTPUT_FILE>  Output JSON file [default: compile_commands.json]
-  -c, --compiler-executable <EXE>  Name of compiler executable [default: cl.exe]
-  -h, --help                       Print help
-  -V, --version                    Print version
+  -i, --input-file <INPUT_FILE>              Path to msbuild.log
+  -o, --output-file <OUTPUT_FILE>            Output JSON file [default: compile_commands.json]
+  -d, --source-directory <SOURCE_DIRECTORY>  Path to source code [default: c:\projects\example]
+  -e, --source-extension <SOURCE_EXTENSION>  File extension for cpp files [default: cpp]
+  -c, --compiler-executable <EXE>            Name of compiler executable [default: cl.exe]
+  -h, --help                                 Print help
+  -V, --version                              Print version
 ```
 
 ## Missing Functionality
