@@ -59,15 +59,6 @@ fn filter_compile_commands(
         .collect()
 }
 
-/// Extract the target cpp file name (i.e. main.cpp) from the compile commands.
-fn get_target_cpp_file(arguments: &[String]) -> Result<&String> {
-    let target_cpp_file = arguments
-        .iter()
-        .last()
-        .ok_or_else(|| anyhow::anyhow!("Unexpected input: {:?}", arguments))?;
-    Ok(target_cpp_file)
-}
-
 /// Converts a vector of compile commands into a CompileCommand.
 fn generate_entries(
     compile_commands: Vec<String>,
@@ -83,7 +74,10 @@ fn generate_entries(
         // We expect a proper path (can be relative) as the last line in the cl.exe compile
         // command.
         // Example: S:\Azure\Storage\XStore\src\base\PlatformConfig\lib\vdsutils.cpp
-        let target_cpp_file = Path::new(get_target_cpp_file(&arguments)?);
+        let target_cpp_file =
+            Path::new(arguments.iter().last().ok_or_else(|| {
+                anyhow::anyhow!("Unexpected input: {:?}", arguments)
+            })?);
 
         // The file field of the compile_commands.json entry
         // vdsutils.cpp
