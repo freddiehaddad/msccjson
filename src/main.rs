@@ -3,14 +3,16 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::thread;
 use std::{fs, fs::File};
-use std::{path::Path, path::PathBuf};
 
 #[derive(Deserialize, Serialize)]
 struct CompileCommand {
-    file: String,
-    directory: String,
+    file: PathBuf,
+    directory: PathBuf,
     arguments: Vec<String>,
 }
 
@@ -32,124 +34,9 @@ struct Cli {
     #[arg(short('d'), long)]
     source_directory: PathBuf,
 
-    /// File extension for cpp files
-    #[arg(short('e'), long, default_value = "cpp")]
-    source_extension: PathBuf,
-
     /// Name of compiler executable
     #[arg(short('c'), long, name = "EXE", default_value = "cl.exe")]
     compiler_executable: String,
-}
-
-/// Returns all lines from `handle` that contain the substring `pattern`.
-fn filter_compile_commands(
-    handle: BufReader<File>,
-    filter: String,
-) -> Vec<String> {
-    handle
-        .lines()
-        .map_while(Result::ok)
-        .filter_map(|line| {
-            if line.to_lowercase().contains(&filter) {
-                Some(line.replace("\"", ""))
-            } else {
-                None
-            }
-        })
-        .collect()
-}
-
-/// Converts a vector of compile commands into a CompileCommand.
-fn generate_entries(
-    compile_commands: Vec<String>,
-    directory_tree: HashMap<String, String>,
-) -> Result<Vec<CompileCommand>> {
-    let mut entries = Vec::new();
-    for compile_command in &compile_commands {
-        let arguments: Vec<_> = compile_command
-            .split_whitespace()
-            .map(String::from)
-            .collect();
-
-        // We expect a proper path (can be relative) as the last line in the
-        // cl.exe compile command.
-        //
-        // Example:
-        //   S:\Azure\Storage\XStore\src\base\PlatformConfig\lib\vdsutils.cpp
-        let target_cpp_file =
-            Path::new(arguments.iter().last().ok_or_else(|| {
-                anyhow::anyhow!("Unexpected input: {:?}", arguments)
-            })?);
-
-        // The file field of the compile_commands.json entry
-        // vdsutils.cpp
-        let file_name = match target_cpp_file.file_name() {
-            Some(file_name) => file_name.to_string_lossy().to_string(),
-            None => {
-                eprintln!(
-                    "Unable to extract file_name component: {}",
-                    target_cpp_file.display()
-                );
-                continue;
-            }
-        };
-
-        if file_name.is_empty() {
-            eprintln!(
-                "File name component is empty: {}",
-                target_cpp_file.display()
-            );
-            continue;
-        }
-
-        // The directory field of the compile_commands.json entry
-        //
-        // Example:
-        //   S:\Azure\Storage\XStore\src\base\PlatformConfig\lib\
-        let directory = match target_cpp_file.parent() {
-            Some(parent) => parent.display().to_string(),
-            None => {
-                eprintln!("{}: parent unknown", target_cpp_file.display());
-                String::new()
-            }
-        };
-
-        // Check the directory tree if path is not part of the compile command
-        let directory = match directory.is_empty() {
-            false => directory,
-            true => match directory_tree.get(&file_name) {
-                Some(dir) => {
-                    // An empty value indicates duplicate files names; skip
-                    if dir.is_empty() {
-                        eprintln!(
-                            "{}: no entry found in tree",
-                            target_cpp_file.display()
-                        );
-                        continue;
-                    } else {
-                        dir.clone()
-                    }
-                }
-                None => {
-                    eprintln!(
-                        "{}: duplicate entries found in tree",
-                        target_cpp_file.display()
-                    );
-                    continue;
-                }
-            },
-        };
-
-        assert!(!directory.is_empty());
-
-        // Construct and add the entry
-        entries.push(CompileCommand {
-            file: file_name,
-            directory,
-            arguments,
-        });
-    }
-    Ok(entries)
 }
 
 /// Explores the entire directory tree starting from `dir` adding any files with
@@ -160,10 +47,9 @@ fn generate_entries(
 /// Because files with matching names can exist in multiple directories, these
 /// cases result in the value entry in the tree being set to the empty string
 /// since we cannot know which path is the correct one.
-fn find_files(
+fn build_directory_tree(
     dir: &Path,
-    extension: &Path,
-    tree: &mut HashMap<String, String>,
+    tree: &mut HashMap<PathBuf, PathBuf>,
 ) -> Result<()> {
     // Iterate over each file in dir
     for entry in fs::read_dir(dir)? {
@@ -172,19 +58,14 @@ fn find_files(
 
         // Further explore any directory
         if path.is_dir() {
-            find_files(&path, extension, tree)?;
+            build_directory_tree(&path, tree)?;
             continue;
         }
 
-        // Test if non-directory entry is a file with a matchin extension
-        if let Some(ext) = path.extension() {
-            if ext.len() != 3 || ext.to_ascii_lowercase() != extension {
-                continue;
-            }
-
-            let file_name =
-                String::from(path.file_name().unwrap().to_string_lossy());
-            let parent = String::from(path.parent().unwrap().to_string_lossy());
+        // Test if non-directory entry is a file with a matching extension
+        if path.is_file() && path.extension().is_some() {
+            let file_name = PathBuf::from(path.file_name().unwrap());
+            let parent = PathBuf::from(path.parent().unwrap());
 
             // Add KV pair (file/path) to the hash table; clear on collision
             match tree.entry(file_name) {
@@ -204,16 +85,9 @@ fn main() -> Result<()> {
     // Parse command line arguments
     let cli = Cli::parse();
 
-    // Get the command line arguments
-    let input_file = cli.input_file;
-    let output_file = cli.output_file;
-    let compiler_executable = cli.compiler_executable;
-    let source_directory = cli.source_directory;
-    let source_extension = cli.source_extension;
-
     // File reader
-    let input_file_handle = File::open(&input_file).with_context(|| {
-        format!("Failed to open {}", input_file.to_string_lossy())
+    let input_file_handle = File::open(&cli.input_file).with_context(|| {
+        format!("Failed to open {}", cli.input_file.to_string_lossy())
     })?;
 
     let input_file_handle = BufReader::new(input_file_handle);
@@ -223,35 +97,134 @@ fn main() -> Result<()> {
         .write(true)
         .create(true)
         .truncate(true)
-        .open(&output_file)
+        .open(&cli.output_file)
         .with_context(|| {
-            format!("Failed to open {}", output_file.to_string_lossy())
+            format!("Failed to open {}", cli.output_file.to_string_lossy())
         })?;
 
     // Build directory tree
     anyhow::ensure!(
-        source_directory.is_dir(),
+        cli.source_directory.is_dir(),
         format!(
             "Provided path is not a directory: {}",
-            source_directory.display()
+            cli.source_directory.display()
         )
     );
 
     // Generate a map of files and their directories
-    let mut source_tree: HashMap<String, String> = HashMap::new();
-    find_files(&source_directory, &source_extension, &mut source_tree)?;
+    let mut source_tree: HashMap<PathBuf, PathBuf> = HashMap::new();
+    build_directory_tree(&cli.source_directory, &mut source_tree)?;
 
-    // Collect all the compile commands from the input file
-    let compile_commands: Vec<_> =
-        filter_compile_commands(input_file_handle, compiler_executable);
+    let (source_tx, source_rx) = mpsc::channel();
+    let (preprocess_tx, preprocess_rx) = mpsc::channel();
+    let (token_tx, token_rx) = mpsc::channel();
+    let (compile_command_tx, compile_command_rx) = mpsc::channel();
+    let (error_tx, error_rx) = mpsc::channel();
 
-    println!("Found {} compile commands", compile_commands.len());
+    thread::scope(|s| {
+        // Log error messages
+        s.spawn(move || {
+            while let Ok(e) = error_rx.recv() {
+                eprintln!("{e}");
+            }
+        });
 
-    // Tokenize the compile commands
-    let compile_commands = generate_entries(compile_commands, source_tree)?;
+        // Collect all the compile commands from the input file
+        s.spawn(move || {
+            input_file_handle
+                .lines()
+                .map_while(Result::ok)
+                .for_each(|line| {
+                    if line.to_lowercase().contains(&cli.compiler_executable) {
+                        let _ = source_tx.send(line);
+                    }
+                });
+        });
 
-    // Generate the compile_commands.json file
-    let serialized = serde_json::to_string_pretty(&compile_commands)?;
-    let _ = writeln!(&output_file_handle, "{serialized}");
+        // Remove nested quotes (")
+        s.spawn(move || {
+            while let Ok(s) = source_rx.recv() {
+                let s = s.replace("\"", "");
+                let _ = preprocess_tx.send(s);
+            }
+        });
+
+        // Tokenize
+        s.spawn(move || {
+            while let Ok(s) = preprocess_rx.recv() {
+                let t: Vec<_> =
+                    s.split_whitespace().map(String::from).collect();
+                let _ = token_tx.send(t);
+            }
+        });
+
+        // Verify the input
+        s.spawn(move || {
+            let error_tx = error_tx.clone();
+            while let Ok(t) = token_rx.recv() {
+                let path = match t.last() {
+                    Some(path) => Path::new(path),
+                    None => {
+                        let e = String::from("Token vector is empty!");
+                        let _ = error_tx.send(e);
+                        continue;
+                    }
+                };
+
+                let file_name = match path.file_name() {
+                    Some(file_name) => PathBuf::from(file_name),
+                    None => {
+                        let e = format!(
+                            "Expected file name as last token in {:?}",
+                            t
+                        );
+                        let _ = error_tx.send(e);
+                        continue;
+                    }
+                };
+
+                if path.extension().is_none() {
+                    let e =
+                        format!("Expected file extension in path {:?}", path);
+                    let _ = error_tx.send(e);
+                    continue;
+                };
+
+                assert!(!file_name.to_string_lossy().is_empty());
+
+                // Safe to unwrap because parent will return at least ""
+                let mut parent = path.parent().unwrap();
+                if parent.to_string_lossy().is_empty() {
+                    parent = match source_tree.get(&file_name) {
+                        Some(dir) => dir,
+                        None => {
+                            let e =
+                                format!("Path not found for {:?}", file_name);
+                            let _ = error_tx.send(e);
+                            continue;
+                        }
+                    };
+                }
+
+                let cc = CompileCommand {
+                    file: file_name,
+                    directory: PathBuf::from(parent),
+                    arguments: t,
+                };
+
+                let _ = compile_command_tx.send(cc);
+            }
+        });
+
+        // Generate the compile_commands.json file
+        s.spawn(move || {
+            let compile_commands: Vec<_> = compile_command_rx.iter().collect();
+            let _ = serde_json::to_writer_pretty(
+                output_file_handle,
+                &compile_commands,
+            );
+        });
+    });
+
     Ok(())
 }
