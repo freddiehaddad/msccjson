@@ -39,48 +39,6 @@ struct Cli {
     compiler_executable: String,
 }
 
-/// Explores the entire directory tree starting from `dir` adding any files with
-/// `extension` to the `tree` as the key and the parent path of the file as the
-/// value.  This lookup table is used for adding the directory entry to the
-/// compile_commands.json file where its not specified on the command line.
-///
-/// Because files with matching names can exist in multiple directories, these
-/// cases result in the value entry in the tree being set to the empty string
-/// since we cannot know which path is the correct one.
-fn build_directory_tree(
-    dir: &Path,
-    tree: &mut HashMap<PathBuf, PathBuf>,
-) -> Result<()> {
-    // Iterate over each file in dir
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        // Further explore any directory
-        if path.is_dir() {
-            build_directory_tree(&path, tree)?;
-            continue;
-        }
-
-        // Test if non-directory entry is a file with a matching extension
-        if path.is_file() && path.extension().is_some() {
-            let file_name = PathBuf::from(path.file_name().unwrap());
-            let parent = PathBuf::from(path.parent().unwrap());
-
-            // Add KV pair (file/path) to the hash table; clear on collision
-            match tree.entry(file_name) {
-                Entry::Vacant(e) => {
-                    e.insert(parent);
-                }
-                Entry::Occupied(mut e) => {
-                    e.get_mut().clear();
-                }
-            };
-        }
-    }
-    Ok(())
-}
-
 fn main() -> Result<()> {
     // Parse command line arguments
     let cli = Cli::parse();
@@ -111,17 +69,91 @@ fn main() -> Result<()> {
         )
     );
 
-    // Generate a map of files and their directories
-    let mut source_tree: HashMap<PathBuf, PathBuf> = HashMap::new();
-    build_directory_tree(&cli.source_directory, &mut source_tree)?;
+    println!("Generating the lookup tree (this will take some time) ...");
 
-    let (source_tx, source_rx) = mpsc::channel();
-    let (preprocess_tx, preprocess_rx) = mpsc::channel();
-    let (token_tx, token_rx) = mpsc::channel();
-    let (compile_command_tx, compile_command_rx) = mpsc::channel();
-    let (error_tx, error_rx) = mpsc::channel();
+    let tree = thread::scope(|s| {
+        let (entry_tx, entry_rx) = mpsc::channel::<PathBuf>();
+        let (error_tx, error_rx) = mpsc::channel();
+
+        // Log error messages
+        s.spawn(move || {
+            while let Ok(e) = error_rx.recv() {
+                eprintln!("{e}");
+            }
+        });
+
+        // Process discovered files
+        let h = s.spawn(move || {
+            // Generate a map of files and their directories
+            let mut tree: HashMap<PathBuf, PathBuf> = HashMap::new();
+            while let Ok(path) = entry_rx.recv() {
+                // Test if entry is a file with an extension
+                if path.extension().is_some() {
+                    let file_name = PathBuf::from(path.file_name().unwrap());
+                    let parent = PathBuf::from(path.parent().unwrap());
+
+                    // Add KV pair (file/path) to the hash table; clear on collision
+                    match tree.entry(file_name) {
+                        Entry::Vacant(e) => {
+                            e.insert(parent);
+                        }
+                        Entry::Occupied(mut e) => {
+                            e.get_mut().clear();
+                        }
+                    };
+                }
+            }
+            tree
+        });
+
+        // Traverse the directory tree
+        s.spawn(move || {
+            let mut stack = vec![cli.source_directory];
+            while let Some(path) = stack.pop() {
+                let reader = match fs::read_dir(&path) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        let e = format!("read_dir error for {path:?}: {e}");
+                        let _ = error_tx.send(e);
+                        continue;
+                    }
+                };
+                for entry in reader {
+                    let entry = match entry {
+                        Ok(de) => de,
+                        Err(e) => {
+                            let e =
+                                format!("Failed to read from {path:?}: {e}",);
+                            let _ = error_tx.send(e);
+                            continue;
+                        }
+                    };
+
+                    let path = entry.path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+
+                    if path.is_file() {
+                        let _ = entry_tx.send(path);
+                    }
+                }
+            }
+        });
+
+        h.join().unwrap()
+    });
+
+    println!("Finished");
 
     thread::scope(|s| {
+        let (source_tx, source_rx) = mpsc::channel();
+        let (preprocess_tx, preprocess_rx) = mpsc::channel();
+        let (token_tx, token_rx) = mpsc::channel();
+        let (compile_command_tx, compile_command_rx) = mpsc::channel();
+        let (error_tx, error_rx) = mpsc::channel();
+
         // Log error messages
         s.spawn(move || {
             while let Ok(e) = error_rx.recv() {
@@ -131,6 +163,7 @@ fn main() -> Result<()> {
 
         // Collect all the compile commands from the input file
         s.spawn(move || {
+            println!("Scanning the msbuild log (this will take some time) ...");
             input_file_handle
                 .lines()
                 .map_while(Result::ok)
@@ -160,6 +193,7 @@ fn main() -> Result<()> {
 
         // Verify the input
         s.spawn(move || {
+            println!("Generating the compile commands ...");
             let error_tx = error_tx.clone();
             while let Ok(t) = token_rx.recv() {
                 let path = match t.last() {
@@ -175,8 +209,7 @@ fn main() -> Result<()> {
                     Some(file_name) => PathBuf::from(file_name),
                     None => {
                         let e = format!(
-                            "Expected file name as last token in {:?}",
-                            t
+                            "Expected file name as last token in {t:?}"
                         );
                         let _ = error_tx.send(e);
                         continue;
@@ -184,8 +217,7 @@ fn main() -> Result<()> {
                 };
 
                 if path.extension().is_none() {
-                    let e =
-                        format!("Expected file extension in path {:?}", path);
+                    let e = format!("Expected file extension in path {path:?}");
                     let _ = error_tx.send(e);
                     continue;
                 };
@@ -195,11 +227,10 @@ fn main() -> Result<()> {
                 // Safe to unwrap because parent will return at least ""
                 let mut parent = path.parent().unwrap();
                 if parent.to_string_lossy().is_empty() {
-                    parent = match source_tree.get(&file_name) {
+                    parent = match tree.get(&file_name) {
                         Some(dir) => dir,
                         None => {
-                            let e =
-                                format!("Path not found for {:?}", file_name);
+                            let e = format!("Path not found for {file_name:?}");
                             let _ = error_tx.send(e);
                             continue;
                         }
@@ -218,6 +249,7 @@ fn main() -> Result<()> {
 
         // Generate the compile_commands.json file
         s.spawn(move || {
+            println!("Generating the compile_commands.json database ...");
             let compile_commands: Vec<_> = compile_command_rx.iter().collect();
             let _ = serde_json::to_writer_pretty(
                 output_file_handle,
@@ -226,5 +258,6 @@ fn main() -> Result<()> {
         });
     });
 
+    println!("Finished!");
     Ok(())
 }
