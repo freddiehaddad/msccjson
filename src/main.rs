@@ -44,11 +44,19 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // File reader
-    let input_file_handle = File::open(&cli.input_file).with_context(|| {
-        format!("Failed to open {}", cli.input_file.to_string_lossy())
-    })?;
+    let input_file_handle =
+        BufReader::new(File::open(&cli.input_file).with_context(|| {
+            format!("Failed to open {}", cli.input_file.to_string_lossy())
+        })?);
 
-    let input_file_handle = BufReader::new(input_file_handle);
+    // Verify source directory is a valid path
+    anyhow::ensure!(
+        cli.source_directory.is_dir(),
+        format!(
+            "Provided path is not a directory: {}",
+            cli.source_directory.display()
+        )
+    );
 
     // File writer
     let output_file_handle = File::options()
@@ -60,22 +68,13 @@ fn main() -> Result<()> {
             format!("Failed to open {}", cli.output_file.to_string_lossy())
         })?;
 
-    // Build directory tree
-    anyhow::ensure!(
-        cli.source_directory.is_dir(),
-        format!(
-            "Provided path is not a directory: {}",
-            cli.source_directory.display()
-        )
-    );
-
-    println!("Generating the lookup tree (this will take some time) ...");
-
     let tree = thread::scope(|s| {
+        println!("Generating the lookup tree (this will take some time) ...");
+
         let (entry_tx, entry_rx) = mpsc::channel::<PathBuf>();
         let (error_tx, error_rx) = mpsc::channel();
 
-        // Log error messages
+        // Separate thread for error handling.
         s.spawn(move || {
             while let Ok(e) = error_rx.recv() {
                 eprintln!("{e}");
@@ -142,9 +141,9 @@ fn main() -> Result<()> {
             }
         });
 
+        // Return the tree to the main thread
         h.join().unwrap()
     });
-
     println!("Finished");
 
     thread::scope(|s| {
@@ -154,7 +153,7 @@ fn main() -> Result<()> {
         let (compile_command_tx, compile_command_rx) = mpsc::channel();
         let (error_tx, error_rx) = mpsc::channel();
 
-        // Log error messages
+        // Separate thread for error handling.
         s.spawn(move || {
             while let Ok(e) = error_rx.recv() {
                 eprintln!("{e}");
@@ -217,7 +216,7 @@ fn main() -> Result<()> {
                 };
 
                 if path.extension().is_none() {
-                    let e = format!("Expected file extension in path {path:?}");
+                    let e = format!("Expected file extension in {path:?}");
                     let _ = error_tx.send(e);
                     continue;
                 };
@@ -249,7 +248,7 @@ fn main() -> Result<()> {
 
         // Generate the compile_commands.json file
         s.spawn(move || {
-            println!("Generating the compile_commands.json database ...");
+            println!("Writing {} database ...", cli.output_file.display());
             let compile_commands: Vec<_> = compile_command_rx.iter().collect();
             let _ = serde_json::to_writer_pretty(
                 output_file_handle,
@@ -257,7 +256,7 @@ fn main() -> Result<()> {
             );
         });
     });
-
     println!("Finished!");
+
     Ok(())
 }
