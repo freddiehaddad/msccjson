@@ -1,13 +1,13 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::fs::{File, read_dir};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
-use std::{fs, fs::File};
 
 #[derive(Deserialize, Serialize)]
 struct CompileCommand {
@@ -56,7 +56,7 @@ fn find_all_files(
 ) {
     let mut stack = vec![path];
     while let Some(path) = stack.pop() {
-        let reader = match fs::read_dir(&path) {
+        let reader = match read_dir(&path) {
             Ok(r) => r,
             Err(e) => {
                 let e = format!("read_dir error for {path:?}: {e}");
@@ -213,7 +213,7 @@ fn main() -> Result<()> {
     );
 
     // Verify source directory is a valid path
-    anyhow::ensure!(
+    ensure!(
         cli.source_directory.is_dir(),
         format!(
             "Provided path is not a directory: {:?}",
@@ -233,7 +233,7 @@ fn main() -> Result<()> {
         "Preparing to generate the lookup tree (this will take some time) ..."
     );
     let tree = thread::scope(|s| {
-        let (entry_tx, entry_rx) = channel::<PathBuf>();
+        let (entry_tx, entry_rx) = channel();
         let (error_tx, error_rx) = channel();
 
         // Separate thread for error handling.
