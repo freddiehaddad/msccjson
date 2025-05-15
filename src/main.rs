@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
+/// compile_commands.json entry descriptor
 #[derive(Deserialize, Serialize)]
 struct CompileCommand {
     file: PathBuf,
@@ -16,6 +17,7 @@ struct CompileCommand {
     arguments: Vec<String>,
 }
 
+/// Command line arguments
 #[derive(Parser)]
 #[command(
     version,
